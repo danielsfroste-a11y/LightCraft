@@ -1,4 +1,4 @@
-name: Clear GitHub Actions artifacts and caches
+name: Purge all GitHub Actions storage (on-demand)
 on:
   push:
     paths:
@@ -10,25 +10,45 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Delete retained artifacts and caches in this repository
+      - name: Delete ALL existing artifacts, caches and completed runs
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           repo="$GITHUB_REPOSITORY"
-          echo "Cleaning artifacts in $repo"
-          gh api --paginate "repos/$repo/actions/artifacts?per_page=100" --jq '.artifacts[].id' | while read -r id; do
-            [ -z "$id" ] && continue
-            gh api -X DELETE "repos/$repo/actions/artifacts/$id" >/dev/null
-            echo "Deleted artifact $id"
+          echo "Cleanup repository: $repo"
+          artifact_count=0
+          while :; do
+            ids=$(gh api "repos/$repo/actions/artifacts?per_page=100" --jq '.artifacts[].id')
+            [ -z "$ids" ] && break
+            for id in $ids; do
+              gh api -X DELETE "repos/$repo/actions/artifacts/$id" >/dev/null
+              artifact_count=$((artifact_count+1))
+            done
           done
-          echo "Cleaning caches in $repo"
-          gh api --paginate "repos/$repo/actions/caches?per_page=100" --jq '.actions_caches[].id' | while read -r id; do
-            [ -z "$id" ] && continue
-            gh api -X DELETE "repos/$repo/actions/caches/$id" >/dev/null
-            echo "Deleted cache $id"
+          echo "Deleted artifacts: $artifact_count"
+          cache_count=0
+          while :; do
+            ids=$(gh api "repos/$repo/actions/caches?per_page=100" --jq '.actions_caches[].id')
+            [ -z "$ids" ] && break
+            for id in $ids; do
+              gh api -X DELETE "repos/$repo/actions/caches/$id" >/dev/null
+              cache_count=$((cache_count+1))
+            done
           done
-          echo "GitHub Actions artifact/cache cleanup complete"
+          echo "Deleted caches: $cache_count"
+          run_count=0
+          while :; do
+            ids=$(gh api "repos/$repo/actions/runs?status=completed&per_page=100" --jq '.workflow_runs[].id')
+            [ -z "$ids" ] && break
+            for id in $ids; do
+              [ "$id" = "$GITHUB_RUN_ID" ] && continue
+              gh api -X DELETE "repos/$repo/actions/runs/$id" >/dev/null
+              run_count=$((run_count+1))
+            done
+          done
+          echo "Deleted completed workflow runs: $run_count"
+          echo "Storage cleanup finished: $repo"
